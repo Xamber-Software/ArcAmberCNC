@@ -131,15 +131,16 @@ jobs:
           cache-dependency-path: backend/requirements-ci.txt
       - name: Install pinned Python build and check tools
         run: python -m pip install -r backend/requirements-ci.txt
-      - name: Check Python formatting and code
+      - name: Check Python formatting, code and module boundaries
         run: |
-          ruff check backend
-          ruff format --check backend
+          ruff check backend qt/python qt/tests/python qt/scripts qt/app/main.py qt/setup.py
+          ruff format --check backend qt/python qt/tests/python qt/scripts qt/app/main.py qt/setup.py
+          python qt/scripts/check_boundaries.py
       - name: Build and install the service package
         run: |
           python -m build --no-isolation backend
           python -m pip install --no-deps backend/dist/*.whl
-      - name: Test the installed CLI and Unix socket protocol
+      - name: Test the installed service, controller boundary and Unix socket protocol
         run: python -m unittest discover -s backend/tests -v
       - uses: actions/upload-artifact@v7
         if: matrix.python == '3.13'
@@ -221,15 +222,56 @@ jobs:
           path: frontend/src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: error
 
+  qt-build:
+    name: Native Qt Debian 13 UI, socket service and package tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Check the Qt container entry point
+        run: |
+          shellcheck qt/scripts/ci-check.sh
+          bash -n qt/scripts/ci-check.sh
+      - name: Build, test and package the native UI in Debian 13
+        run: |
+          docker run --rm --init --platform linux/amd64 \
+            --env CI=true \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/workspace" \
+            --workdir /workspace \
+            debian:13-slim \
+            bash qt/scripts/ci-check.sh --install-deps
+      - name: Upload Qt test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-qt-test-diagnostics
+          path: qt/build/Testing/Temporary/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v7
+        with:
+          name: betterlinuxcnc-qt-debian13
+          path: qt/build/*.deb
+          if-no-files-found: error
+
   ci-gate:
     # Preserve this exact check name for existing branch protection.
     name: CI Gate
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     if: ${{ always() }}
-    needs: [source-checks, web-build, browser-tests, python-checks, tauri-build]
+    needs:
+      [
+        source-checks,
+        web-build,
+        browser-tests,
+        python-checks,
+        tauri-build,
+        qt-build,
+      ]
     steps:
-      - name: Require Web, Python and Tauri verification jobs to pass
+      - name: Require Web, Python, Tauri and native Qt verification jobs to pass
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: |

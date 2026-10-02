@@ -1,0 +1,10 @@
+module BetterCnc.Ui
+singleton Theme 1.0 Theme.qml
+UiText 1.0 UiText.qml
+UiButton 1.0 UiButton.qml
+UiIcon 1.0 UiIcon.qml
+UiCheckBox 1.0 UiCheckBox.qml
+UiComboBox 1.0 UiComboBox.qml
+UiTextField 1.0 UiTextField.qml
+UiRange 1.0 UiRange.qml
+UiScrollBar 1.0 UiScrollBar.qml

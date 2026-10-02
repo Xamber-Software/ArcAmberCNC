@@ -1,5 +1,5 @@
-"""Public entry point; the transport and protocol implementation are private."""
+"""Public CLI and embeddable Unix controller service entry points."""
 
-from ._server import main
+from ._server import main, serve
 
-__all__ = ["main"]
+__all__ = ["main", "serve"]

@@ -1,0 +1,6 @@
+/build*/
+/artifacts/
+/.cache/
+/.venv/
+/python/*.egg-info/
+/dist/

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=BetterLinuxCNC
+Comment=Native Qt Quick machine-operation interface prototype
+Exec=betterlinuxcnc
+Terminal=false
+Categories=Utility;Engineering;

@@ -82,7 +82,7 @@ class ServiceTests(unittest.TestCase):
     def test_rejects_machine_commands_and_invalid_versions(self):
         for version, method, code in [
             (1, "machine.home-all", "unsupported_method"),
-            (2, "health", "unsupported_version"),
+            (3, "health", "unsupported_version"),
             (True, "health", "unsupported_version"),
         ]:
             with self.subTest(version=version, method=method):

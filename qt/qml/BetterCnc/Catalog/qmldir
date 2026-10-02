@@ -1,0 +1,2 @@
+module BetterCnc.Catalog
+singleton Catalog 1.0 Catalog.qml

@@ -1,0 +1,3 @@
+module BetterCnc.Manual
+ManualState 1.0 ManualState.qml
+ManualPanel 1.0 ManualPanel.qml

@@ -1,10 +1,12 @@
-# Tauri 专用本地控制架构
+# Tauri 本地控制架构记录
 
-决策日期：2026-09-22。用户确定正式产品只通过 Tauri 桌面程序操作，目标环境为 Debian 13、Intel 核显。
+原决策日期：2026-09-22。该决策曾约定正式产品只通过 Tauri 桌面程序操作，目标环境为 Debian 13、Intel 核显。
+
+2026-10-02 用户决定迁移为原生 Qt Quick/QML，新增正式桌面入口为 `qt/`。当前决策和验证步骤见 [Qt 迁移说明](qt-qml-migration.md)。`frontend/` 留作迁移对照和 Web 预览，Tauri/Rust 代码及诊断测试保留；本文继续记录其已有实现和此前规划，不再要求 Qt 经由 Vue、Tauri IPC 或 Rust。未来 Qt 使用独立 C++ 适配层对接原 Unix socket/Python 边界，当前仍只有原生展示，不接入机床。
 
 当前已搭建 Tauri 桌面环境和 Python 本地诊断服务，完成经 Rust/Unix socket 的 `health` 查询；界面可区分本地服务可达与机床未接入。只有此诊断链路已实现，下文的运动控制、状态 Channel、持续会话、操作权和故障停止策略仍是后续接入规范。诊断使用短连接查询，服务显式启动，不自动启动 LinuxCNC。运行方式见 [Python 服务说明](../backend/README.md)。
 
-## 控制链路
+## 原 Tauri 控制链路
 
 ```text
 Vue 业务界面
@@ -21,7 +23,7 @@ Python 控制服务
 LinuxCNC 控制核心、实时运动与 HAL
 ```
 
-正式控制链路不开放 HTTP/WebSocket 控制服务，也不要求 FastAPI 或 OpenAPI。浏览器仅用于界面预览、设计资料和展示测试；不创建可连接真实设备的浏览器适配器。开发时 Vite 的页面服务不属于机床控制接口。
+不开放 HTTP/WebSocket 控制服务、不创建浏览器设备适配器的边界继续适用于 Qt 迁移；无需 FastAPI 或 OpenAPI。浏览器仅用于界面预览、设计资料和展示测试，开发时 Vite 的页面服务不属于机床控制接口。下文涉及 Tauri、Rust 和 Channel 的具体分工仅描述保留的 Tauri 路径；命令生命周期、唯一写入口和状态新鲜度约束在未来 Qt 接入时仍须满足。
 
 ## 各层职责
 

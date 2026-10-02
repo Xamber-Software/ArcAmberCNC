@@ -1,4 +1,4 @@
-"""Local bounded request/reply transport. No LinuxCNC imports or hardware access."""
+"""Private Unix transport; controller policy belongs to bettercnc_controller."""
 
 import argparse
 import asyncio
@@ -11,7 +11,8 @@ import struct
 import tempfile
 from pathlib import Path
 
-from ._protocol import MAX_FRAME_BYTES, response
+from ._controller_runtime import ControllerRuntime
+from ._protocol import MAX_FRAME_BYTES, ProtocolError, decode, encode, health
 
 IO_TIMEOUT = 2.0
 MAX_CLIENTS = 8
@@ -22,7 +23,15 @@ def default_socket() -> Path:
     return runtime / "betterlinuxcnc" / "control.sock"
 
 
-async def serve(path: Path) -> None:
+async def serve(
+    path: Path, *, ini_path=None, controller_factory=None, process_factory=None, stop_event=None
+) -> None:
+    """Embed the service with explicit controller/process seams and shutdown.
+
+    Factory injection is a host API, never a socket parameter. The command
+    channel is created only after an owner attaches; no machine is auto-started.
+    """
+    path = Path(path)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory = path.parent.lstat()
     if (
@@ -33,6 +42,7 @@ async def serve(path: Path) -> None:
         raise ValueError("socket directory must be owned by this user with mode 0700")
 
     clients: set[asyncio.Task] = set()
+    runtime = None
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task = asyncio.current_task()
@@ -42,6 +52,19 @@ async def serve(path: Path) -> None:
             await writer.wait_closed()
             return
         clients.add(task)
+        owner = object()
+        ids = set()
+
+        async def watch_disconnect():
+            # StreamReader learns EOF even while an executor command is pending.
+            # Cancellation invalidates queued work in release(), before close.
+            while True:
+                if reader.at_eof():
+                    task.cancel()
+                    return
+                await asyncio.sleep(0.05)
+
+        watcher = asyncio.create_task(watch_disconnect())
         try:
             while True:
                 async with asyncio.timeout(IO_TIMEOUT):
@@ -50,24 +73,56 @@ async def serve(path: Path) -> None:
                     if not 0 < size <= MAX_FRAME_BYTES:
                         return
                     payload = await reader.readexactly(size)
-                    reply = response(payload)
+                request = None
+                try:
+                    request = decode(payload)
+                    if request.version == 1:
+                        result = health(request)
+                    else:
+                        if request.request_id in ids:
+                            raise ProtocolError(
+                                "duplicate_request", "a request_id cannot be replayed"
+                            )
+                        if len(ids) >= 100000:
+                            raise ProtocolError(
+                                "session_limit", "reconnect to open a fresh session"
+                            )
+                        ids.add(request.request_id)
+                        result = await runtime.handle(owner, request.method, request.params)
+                    reply = encode(request.version, request.request_id, result=result)
+                except ProtocolError as error:
+                    reply = encode(
+                        request.version if request else error.version,
+                        request.request_id if request else error.request_id,
+                        error=error,
+                    )
+                except (ValueError, OSError, RuntimeError) as error:
+                    reply = encode(
+                        request.version if request else 2,
+                        request.request_id if request else "",
+                        error=ProtocolError("service_error", str(error)),
+                    )
+                async with asyncio.timeout(IO_TIMEOUT):
                     writer.write(struct.pack("!I", len(reply)) + reply)
                     await writer.drain()
         except (asyncio.IncompleteReadError, ConnectionError, TimeoutError):
             pass
         finally:
+            watcher.cancel()
+            await asyncio.gather(watcher, return_exceptions=True)
+            await runtime.release(owner)
             clients.discard(task)
             writer.close()
             with contextlib.suppress(ConnectionError):
                 await writer.wait_closed()
 
-    stopped = asyncio.Event()
+    stopped = stop_event or asyncio.Event()
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    signals = (signal.SIGINT, signal.SIGTERM) if stop_event is None else ()
+    for sig in signals:
         loop.add_signal_handler(sig, stopped.set)
 
-    # Bind ourselves: asyncio's path-based helper may unlink an existing socket.
-    # Never replace another process's endpoint, including on a second startup.
+    # Bind ourselves: never unlink another service's endpoint on startup.
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     identity = None
     try:
@@ -75,9 +130,10 @@ async def serve(path: Path) -> None:
         identity = path.lstat()
         path.chmod(0o600)
         listener.setblocking(False)
+        runtime = ControllerRuntime(ini_path, controller_factory, process_factory)
         server = await asyncio.start_unix_server(handle, sock=listener, limit=MAX_FRAME_BYTES)
         async with server:
-            print(f"Local diagnostics service ready: {path}", flush=True)
+            print(f"Local controller service ready: {path}", flush=True)
             await stopped.wait()
     finally:
         listener.close()
@@ -85,20 +141,25 @@ async def serve(path: Path) -> None:
         for task in pending:
             task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
+        if runtime is not None:
+            await runtime.close()
         if identity is not None:
             with contextlib.suppress(FileNotFoundError):
                 current = path.lstat()
                 if (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino):
                     path.unlink()
-        for sig in (signal.SIGINT, signal.SIGTERM):
+        for sig in signals:
             loop.remove_signal_handler(sig)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="BetterLinuxCNC local diagnostics service")
+    parser = argparse.ArgumentParser(description="BetterLinuxCNC local controller service")
     parser.add_argument("--socket", type=Path, default=default_socket())
+    parser.add_argument("--ini", type=Path)
     args = parser.parse_args()
     try:
-        asyncio.run(serve(args.socket.absolute()))
+        asyncio.run(
+            serve(args.socket.absolute(), ini_path=str(args.ini.absolute()) if args.ini else None)
+        )
     except (OSError, ValueError) as exc:
         parser.exit(1, f"Cannot start local service: {exc}\n")
